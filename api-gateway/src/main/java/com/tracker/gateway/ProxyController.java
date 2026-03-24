@@ -11,6 +11,6 @@ public class ProxyController {
 
     @GetMapping("/hello")
     public String hello(Authentication auth) {
-        return "Hello " + auth.getName();
+        return "Hello " + auth.getName() ;
     }
 }

@@ -2,8 +2,12 @@ spring:
   application:
     name: api-gateway
 
+  output:
+    ansi:
+      enabled: ALWAYS
+
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/tracker_db}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/tracker_db}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -35,6 +39,8 @@ logging:
     org.springframework.security: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%clr(%d{yyyy-MM-dd HH:mm:ss}){faint} %clr(%5p) %clr(${PID:- }){magenta} %clr(---){faint} %clr([%15.15t]){faint} %clr(%-40.40logger{39}){cyan} : %m%n%wEx"
 
 # Actuator (optional but recommended)
 management:
@@ -42,7 +48,16 @@ management:
     web:
       exposure:
         include: health,info
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
 
+  instance:
+    prefer-ip-address: true
+    hostname: localhost
 # Future Gateway routing config (placeholder for later upgrade)
 #app:
 #  services:

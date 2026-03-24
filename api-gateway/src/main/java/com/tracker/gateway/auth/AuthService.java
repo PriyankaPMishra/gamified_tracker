@@ -1,5 +1,7 @@
 package com.tracker.gateway.auth;
 
+import com.tracker.gateway.dto.LoginRequest;
+import com.tracker.gateway.dto.RegisterRequest;
 import com.tracker.gateway.user.User;
 import com.tracker.gateway.user.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,24 +18,26 @@ public class AuthService {
         this.jwtUtil = jwtUtil;
     }
 
-    public String register(String email, String password) {
+    public String register(RegisterRequest request) {
         User user = new User();
-        user.setEmail(email);
-        user.setPassword(password); // later: hash it
+        user.setFirstName(request.getFirstName());
+        user.setLastName(request.getLastName());
+        user.setEmail(request.getEmail());
+        user.setPassword(request.getPassword());
 
         userRepository.save(user);
 
-        return jwtUtil.generateToken(email);
+        return jwtUtil.generateToken(request.getEmail());
     }
 
-    public String login(String email, String password) {
-        User user = userRepository.findByEmail(email)
+    public String login(LoginRequest req) {
+        User user = userRepository.findByEmail(req.getEmail())
                 .orElseThrow();
 
-        if (!user.getPassword().equals(password)) {
+        if (!user.getPassword().equals(req.getPassword())) {
             throw new RuntimeException("Invalid credentials");
         }
 
-        return jwtUtil.generateToken(email);
+        return jwtUtil.generateToken(req.getEmail());
     }
 }

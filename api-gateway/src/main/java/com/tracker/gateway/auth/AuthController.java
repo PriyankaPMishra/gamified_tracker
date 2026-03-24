@@ -1,5 +1,7 @@
 package com.tracker.gateway.auth;
 
+import com.tracker.gateway.dto.LoginRequest;
+import com.tracker.gateway.dto.RegisterRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -19,12 +21,12 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public String register(@RequestBody Map<String, String> req) {
-        return authService.register(req.get("email"), req.get("password"));
+    public String register(@RequestBody RegisterRequest req) {
+        return authService.register(req);
     }
 
     @PostMapping("/login")
-    public String login(@RequestBody Map<String, String> req) {
-        return authService.login(req.get("email"), req.get("password"));
+    public String login(@RequestBody LoginRequest req) {
+        return authService.login(req);
     }
 }
