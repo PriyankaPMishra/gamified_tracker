@@ -1,8 +1,10 @@
 package com.tracker.activity.service;
 
+import com.tracker.activity.client.GamificationClient;
 import com.tracker.activity.dao.ActivityLog;
 import com.tracker.activity.dto.ActivityLogResponse;
 import com.tracker.activity.dto.AddActivityLogRequest;
+import com.tracker.activity.dto.LevelTrackerRequestDTO;
 import com.tracker.activity.repository.ActivityLogRepository;
 import com.tracker.activity.repository.ActivityRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +24,9 @@ public class ActivityLogService {
     @Autowired
     ActivityRepository activityRepository;
 
+    @Autowired
+    GamificationClient gamificationClient;
+
     public ResponseEntity<ActivityLogResponse> getActivityLogResponseEntity(Long id) {
         return ResponseEntity.ok(mapToActivityLogResponse(activityLogRepository.findById(id).orElseThrow(() -> new RuntimeException("No Activity Found"))));
     }
@@ -30,6 +35,9 @@ public class ActivityLogService {
         ActivityLog activityLog = mapToActivityLog(addActivityLogRequest);
         activityLog.setDurationMinutes(Duration.between(activityLog.getStartTime(), activityLog.getEndTime()).toMinutes());
         activityLog.setXpEarned(activityLog.getDurationMinutes() * activityLog.getActivity().getXpMultiplier());
+
+        gamificationClient.createLevelTracker(new LevelTrackerRequestDTO(activityLog.getUserId(), activityLog.getActivity().getId(), activityLog.getXpEarned()));
+
         activityLogRepository.save(activityLog);
 
         return ResponseEntity.ok(mapToActivityLogResponse(activityLog));

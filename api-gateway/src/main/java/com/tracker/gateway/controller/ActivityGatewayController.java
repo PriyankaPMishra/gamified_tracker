@@ -7,6 +7,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/activity")
 public class ActivityGatewayController {
@@ -15,6 +17,11 @@ public class ActivityGatewayController {
 
     public ActivityGatewayController(ActivityClient activityClient) {
         this.activityClient = activityClient;
+    }
+
+    @GetMapping
+    public ResponseEntity<List<ActivityResponse>> getAllActivities() {
+        return activityClient.getAllActivities();
     }
 
     @GetMapping("/{name}")

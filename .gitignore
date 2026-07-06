@@ -199,3 +199,8 @@ README.html
 *.iml
 .idea
 .exercism
+
+### Environment variables ###
+.env
+.env.local
+.env.*.local

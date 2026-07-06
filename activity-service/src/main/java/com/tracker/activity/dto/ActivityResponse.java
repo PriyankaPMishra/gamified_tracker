@@ -1,8 +1,6 @@
 package com.tracker.activity.dto;
 
 import com.tracker.activity.dao.Category;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import lombok.*;
 
 import java.time.LocalDateTime;
@@ -15,7 +13,6 @@ import java.time.LocalDateTime;
 public class ActivityResponse {
     public String name; // Study, Gaming, Work
 
-    @Enumerated(EnumType.STRING)
     public Category category;
     // STUDY, WORK, GAMING, CHORES
 

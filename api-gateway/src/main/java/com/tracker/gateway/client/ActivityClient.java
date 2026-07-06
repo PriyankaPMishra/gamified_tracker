@@ -16,6 +16,9 @@ import java.util.List;
 @FeignClient(name = "activity-service")
 public interface ActivityClient {
 
+    @GetMapping("/activity/")
+    ResponseEntity<List<ActivityResponse>> getAllActivities();
+
     @GetMapping("/activity/{name}")
     ResponseEntity<ActivityResponse> getActivity(@PathVariable("name") String name);
 
