@@ -1,6 +1,6 @@
 # TODO / Fix Backlog — Gamified Tracker
 
-Analysis of enhancements, engineering improvements, and business-logic gaps, grounded in the actual codebase (not a generic Spring checklist — see `CLAUDE.md` for that). Items are tagged 🔴 high / 🟡 medium / 🟢 nice-to-have and grouped by category.
+Analysis of enhancements, engineering improvements, and business-logic gaps, grounded in the actual codebase. Items are tagged 🔴 high / 🟡 medium / 🟢 nice-to-have and grouped by category.
 
 > Priority order to tackle first is at the bottom ([Top 5](#top-5-to-do-first)).
 
