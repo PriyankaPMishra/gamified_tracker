@@ -41,7 +41,8 @@ public class LevelTrackerControllerTest {
                 1L,
                 5,
                 500.0,
-                250.0
+                250.0,
+                false
         );
 
         var response2 = new LevelTrackerDto(
@@ -49,7 +50,8 @@ public class LevelTrackerControllerTest {
                 2L,
                 3,
                 300.0,
-                150.0
+                150.0,
+                false
         );
 
         when(levelTrackerService.findAll())
@@ -72,7 +74,8 @@ public class LevelTrackerControllerTest {
                 1L,
                 5,
                 500.0,
-                250.0
+                250.0,
+                false
         );
 
         when(levelTrackerService.findById(anyLong()))
@@ -96,7 +99,8 @@ public class LevelTrackerControllerTest {
                 1L,
                 1,
                 100.0,
-                100.0
+                100.0,
+                false
         );
 
         // IDOR fix: userId now comes from the "userId" request header, not the body.
@@ -141,7 +145,8 @@ public class LevelTrackerControllerTest {
                 1L,
                 5,
                 500.0,
-                250.0
+                250.0,
+                false
         );
 
         var response2 = new LevelTrackerDto(
@@ -149,7 +154,8 @@ public class LevelTrackerControllerTest {
                 2L,
                 3,
                 300.0,
-                150.0
+                150.0,
+                false
         );
 
         when(levelTrackerService.findByUserId(anyLong()))
@@ -173,7 +179,8 @@ public class LevelTrackerControllerTest {
                 1L,
                 5,
                 500.0,
-                250.0
+                250.0,
+                false
         );
 
         var response2 = new LevelTrackerDto(
@@ -181,7 +188,8 @@ public class LevelTrackerControllerTest {
                 1L,
                 3,
                 300.0,
-                150.0
+                150.0,
+                false
         );
 
         when(levelTrackerService.findByActivityId(anyLong()))
