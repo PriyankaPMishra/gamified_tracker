@@ -1,0 +1,1333 @@
+{
+  "info": {
+    "name": "Gamified Tracker API",
+    "description": "Covers the API Gateway's public surface (port 8080), plus direct-hit folders for Activity Service (8081) and Gamification Service (8082) for internal debugging, per API.md. Includes a dedicated 'Security - IDOR Verification' folder exercising the userId-from-JWT fix (spoofed header neutralization, intentionally-open reads).\n\nRun order matters: use Collection Runner top-to-bottom (Auth -> Activity -> Activity Log -> Level Tracker -> Activity Level Threshold -> Security -> Misc -> internal-service folders). Test data (emails, activity name, a synthetic activityId) is generated once per run by the collection-level pre-request script and cached in collection variables, so re-running the whole collection produces fresh, non-colliding data each time.\n\nPrerequisites: `docker-compose up --build` (or the equivalent Maven/local run) so the Gateway (8080), Activity Service (8081), Gamification Service (8082), and Eureka are all up.\n\nKnown caveats baked into these tests:\n- `POST /api/activitylog` (and its internal-service equivalent) can 500 due to a pre-existing, unrelated bug in `ActivityLogServiceImpl`'s XP-bonus roll (`RandomGenerator.getDefault()` failing to find the `L32X64MixRandom` algorithm provider in some JVM/container images). If that request fails, downstream requests that depend on its output (`activityLogId`) are guarded to report a skip rather than crash the run.\n- No-token requests currently return `403`, not the semantically-expected `401` (default Spring Security behavior with no custom `AuthenticationEntryPoint`) - tests accept either.\n- `GET /level/{id}` and `GET /activitylog/{id}` reads are intentionally open to any authenticated user (a social/leaderboard feature, not an access-control gap) - tests assert `200`, not `403`, when a different user reads them.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Bootstrap unique test data once per collection run.",
+          "if (!pm.collectionVariables.get('userAEmail')) {",
+          "    var ts = Date.now();",
+          "    pm.collectionVariables.set('userAEmail', 'postman.alice.' + ts + '@example.com');",
+          "    pm.collectionVariables.set('userBEmail', 'postman.bob.' + ts + '@example.com');",
+          "    pm.collectionVariables.set('adminEmail', 'postman.admin.' + ts + '@example.com');",
+          "    pm.collectionVariables.set('activityName', 'PostmanActivity_' + ts);",
+          "    pm.collectionVariables.set('thresholdActivityId', String((ts % 100000) + 1));",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "gatewayUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "activityServiceUrl", "value": "http://localhost:8081", "type": "string" },
+    { "key": "gamificationServiceUrl", "value": "http://localhost:8082", "type": "string" },
+    { "key": "userAEmail", "value": "", "type": "string" },
+    { "key": "userAPassword", "value": "Password123!", "type": "string" },
+    { "key": "userBEmail", "value": "", "type": "string" },
+    { "key": "userBPassword", "value": "Password123!", "type": "string" },
+    { "key": "adminEmail", "value": "", "type": "string" },
+    { "key": "adminPassword", "value": "Password123!", "type": "string" },
+    { "key": "userAToken", "value": "", "type": "string" },
+    { "key": "userBToken", "value": "", "type": "string" },
+    { "key": "adminToken", "value": "", "type": "string" },
+    { "key": "userAId", "value": "", "type": "string" },
+    { "key": "userBId", "value": "", "type": "string" },
+    { "key": "activityName", "value": "", "type": "string" },
+    { "key": "activityLogId", "value": "", "type": "string" },
+    { "key": "thresholdActivityId", "value": "1", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register - Admin",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"firstName\":\"Admin\",\"lastName\":\"Postman\",\"email\":\"{{adminEmail}}\",\"password\":\"{{adminPassword}}\",\"role\":\"ADMIN\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/auth/register", "host": ["{{gatewayUrl}}"], "path": ["auth", "register"] },
+            "description": "Public endpoint. Registers an ADMIN user (role is client-suppliable at register time - a known, documented tradeoff, not something this collection needs to work around)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var token = pm.response.text();",
+                  "pm.collectionVariables.set('adminToken', token);",
+                  "pm.test('Response body is a JWT (3 dot-separated parts)', function () {",
+                  "    pm.expect(token.split('.').length).to.eql(3);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register - User A",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"firstName\":\"Alice\",\"lastName\":\"Postman\",\"email\":\"{{userAEmail}}\",\"password\":\"{{userAPassword}}\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/auth/register", "host": ["{{gatewayUrl}}"], "path": ["auth", "register"] },
+            "description": "Registers a plain USER (role omitted, defaults to USER). Decodes the returned JWT to capture the numeric userId claim used throughout the rest of the collection."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var token = pm.response.text();",
+                  "pm.collectionVariables.set('userAToken', token);",
+                  "function decodeJwt(t) {",
+                  "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "    while (payload.length % 4) payload += '=';",
+                  "    return JSON.parse(atob(payload));",
+                  "}",
+                  "var claims = decodeJwt(token);",
+                  "pm.collectionVariables.set('userAId', String(claims.userId));",
+                  "pm.test('Token contains a userId claim', function () {",
+                  "    pm.expect(claims.userId).to.not.be.undefined;",
+                  "});",
+                  "pm.test('Token role is USER', function () {",
+                  "    pm.expect(claims.role).to.eql('USER');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register - User B",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"firstName\":\"Bob\",\"lastName\":\"Postman\",\"email\":\"{{userBEmail}}\",\"password\":\"{{userBPassword}}\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/auth/register", "host": ["{{gatewayUrl}}"], "path": ["auth", "register"] },
+            "description": "A second independent user, used throughout the Security folder to prove one user cannot write data as another, and that reads are intentionally open across users."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var token = pm.response.text();",
+                  "pm.collectionVariables.set('userBToken', token);",
+                  "function decodeJwt(t) {",
+                  "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "    while (payload.length % 4) payload += '=';",
+                  "    return JSON.parse(atob(payload));",
+                  "}",
+                  "var claims = decodeJwt(token);",
+                  "pm.collectionVariables.set('userBId', String(claims.userId));",
+                  "pm.test('Token contains a userId claim', function () {",
+                  "    pm.expect(claims.userId).to.not.be.undefined;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login - User A",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"{{userAEmail}}\",\"password\":\"{{userAPassword}}\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/auth/login", "host": ["{{gatewayUrl}}"], "path": ["auth", "login"] },
+            "description": "Confirms login works independently of register and returns a token for the same identity."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var token = pm.response.text();",
+                  "function decodeJwt(t) {",
+                  "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "    while (payload.length % 4) payload += '=';",
+                  "    return JSON.parse(atob(payload));",
+                  "}",
+                  "var claims = decodeJwt(token);",
+                  "pm.test('Token subject matches the login email', function () {",
+                  "    pm.expect(claims.sub).to.eql(pm.collectionVariables.get('userAEmail'));",
+                  "});",
+                  "pm.test('Token userId matches the userId captured at registration', function () {",
+                  "    pm.expect(String(claims.userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login - Invalid Password (401)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"{{userAEmail}}\",\"password\":\"WrongPassword!\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/auth/login", "host": ["{{gatewayUrl}}"], "path": ["auth", "login"] },
+            "description": "Wrong password for a real account. Must fail with the same message as a nonexistent-account login, so the error never reveals which one was wrong."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test('ProblemDetail does not reveal whether the email or password was wrong', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.detail).to.eql('Invalid email or password');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Activity",
+      "item": [
+        {
+          "name": "Create Activity (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"{{activityName}}\",\"category\":\"HEALTH\",\"xpMultiplier\":1.5,\"active\":true,\"description\":\"Created by Postman automated tests\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/activity", "host": ["{{gatewayUrl}}"], "path": ["api", "activity"] },
+            "description": "ADMIN-only. `createdAt` is accepted but always server-set, so it's omitted here."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Activity name matches', function () {",
+                  "    pm.expect(json.name).to.eql(pm.collectionVariables.get('activityName'));",
+                  "});",
+                  "pm.test('Category matches', function () {",
+                  "    pm.expect(json.category).to.eql('HEALTH');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Activity - Forbidden (Non-Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"{{activityName}}_forbidden\",\"category\":\"OTHER\",\"xpMultiplier\":1.0,\"active\":true,\"description\":\"should be rejected\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/activity", "host": ["{{gatewayUrl}}"], "path": ["api", "activity"] },
+            "description": "A plain USER token must be rejected - admin gating is enforced at the URL level in SecurityConfig."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Activities",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/activity", "host": ["{{gatewayUrl}}"], "path": ["api", "activity"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(json).to.be.an('array');",
+                  "});",
+                  "pm.test('Contains the activity created earlier', function () {",
+                  "    var names = json.map(function (a) { return a.name; });",
+                  "    pm.expect(names).to.include(pm.collectionVariables.get('activityName'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Activity By Name",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activity/{{activityName}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activity", "{{activityName}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Returned activity name matches', function () {",
+                  "    pm.expect(pm.response.json().name).to.eql(pm.collectionVariables.get('activityName'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Activity By Name - Not Found",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activity/DoesNotExist_{{activityName}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activity", "DoesNotExist_{{activityName}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "pm.test('ProblemDetail status field is 404', function () {",
+                  "    pm.expect(pm.response.json().status).to.eql(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Activity Log",
+      "item": [
+        {
+          "name": "Create Activity Log (User A)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{logStartTime}}\",\"endTime\":\"{{logEndTime}}\",\"notes\":\"Postman automated test log\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/activitylog", "host": ["{{gatewayUrl}}"], "path": ["api", "activitylog"] },
+            "description": "IMPORTANT: this endpoint can return 500 due to a pre-existing, unrelated bug in ActivityLogServiceImpl's XP-bonus roll (RandomGenerator.getDefault() failing to resolve the L32X64MixRandom algorithm in some JVM/container images). If it fails here, that is a known separate issue, not an IDOR regression - the userId-binding fix is independently verified in the Security folder via POST /api/level, which shares the identical Gateway header-injection mechanism but has no RNG dependency.\n\nNote there is deliberately no userId field in the body - the acting user is derived server-side from the JWT."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "var start = new Date(now - 30 * 60000).toISOString().split('.')[0];",
+                  "var end = new Date(now).toISOString().split('.')[0];",
+                  "pm.variables.set('logStartTime', start);",
+                  "pm.variables.set('logEndTime', end);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 (see request description for the known unrelated failure mode)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "    var json = pm.response.json();",
+                  "    pm.collectionVariables.set('activityLogId', String(json.id));",
+                  "    pm.test('Log is owned by the authenticated caller (User A), not any client-supplied value', function () {",
+                  "        pm.expect(String(json.userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "    });",
+                  "} else {",
+                  "    console.warn('Create Activity Log failed - downstream requests depending on activityLogId will be skipped.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Activity Log By Id (Owner)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/{{activityLogId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "{{activityLogId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('activityLogId')) {",
+                  "    pm.test.skip('Skipped - no activityLogId (Create Activity Log likely failed, see that request)');",
+                  "} else {",
+                  "    pm.test('Status is 200', function () {",
+                  "        pm.response.to.have.status(200);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Activity Log By Id (Different User - Open Read)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userBToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/{{activityLogId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "{{activityLogId}}"]
+            },
+            "description": "User B reading User A's log by id. This must succeed - reads are intentionally open to any authenticated user (a social feature), not gated by ownership."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get('activityLogId')) {",
+                  "    pm.test.skip('Skipped - no activityLogId (Create Activity Log likely failed, see that request)');",
+                  "} else {",
+                  "    pm.test('Status is 200 (open read by design, not 403)', function () {",
+                  "        pm.response.to.have.status(200);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Activity Log By Id - Not Found",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/999999999",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "999999999"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Logs For User (Open Read, by User B)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userBToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/user/{{userAId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "user", "{{userAId}}"]
+            },
+            "description": "User B listing User A's logs. Open read by design."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 (open read by design, not 403)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Level Tracker",
+      "item": [
+        {
+          "name": "Create-Update XP (User A)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":25.0}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
+            "description": "No userId field in the body - the acting user is derived server-side from the JWT via the Gateway-injected 'userId' header."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('XP is credited to the authenticated caller', function () {",
+                  "    pm.expect(String(json.userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "});",
+                  "pm.test('activityId matches', function () {",
+                  "    pm.expect(String(json.activityId)).to.eql(pm.collectionVariables.get('thresholdActivityId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Level Trackers",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Level Tracker By Id - Not Found",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/level/999999999",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "level", "999999999"]
+            },
+            "description": "LevelTrackerDto never exposes its internal numeric id (only userId/activityId/level/totalXp/currentLevelXp), so a happy-path GET /api/level/{id} isn't reachable from any other endpoint's response in this API surface - only the not-found case is scriptable without direct DB access."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Level Trackers By User (User A)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/level/user/{{userAId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "level", "user", "{{userAId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Contains the row written earlier', function () {",
+                  "    var activityIds = json.map(function (r) { return String(r.activityId); });",
+                  "    pm.expect(activityIds).to.include(pm.collectionVariables.get('thresholdActivityId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Level Trackers By Activity",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/level/activity/{{thresholdActivityId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "level", "activity", "{{thresholdActivityId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Response is a non-empty array', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json).to.be.an('array');",
+                  "    pm.expect(json.length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create-Update XP - Negative XP Rejected (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":-5}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Activity Level Threshold",
+      "item": [
+        {
+          "name": "Create Threshold",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"level\":2,\"xpRequired\":100.0}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/threshold", "host": ["{{gatewayUrl}}"], "path": ["api", "threshold"] },
+            "description": "Not admin-gated in the current SecurityConfig - any authenticated user can create/overwrite a threshold."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('xpRequired matches', function () {",
+                  "    pm.expect(pm.response.json().xpRequired).to.eql(100.0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Thresholds",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/threshold", "host": ["{{gatewayUrl}}"], "path": ["api", "threshold"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Response is an array', function () {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lookup Threshold By Composite Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"level\":2}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/api/threshold/activity",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "threshold", "activity"]
+            },
+            "description": "A read despite the POST verb - the body is used purely as a lookup key, not persisted."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('xpRequired matches the threshold created earlier', function () {",
+                  "    pm.expect(pm.response.json().xpRequired).to.eql(100.0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lookup Threshold - Not Found",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":999999999,\"level\":999}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/api/threshold/activity",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "threshold", "activity"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Security - IDOR Verification",
+      "item": [
+        {
+          "name": "Write XP As Self (No Spoofed Header)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":5}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
+            "description": "Baseline: a normal write with no userId in the body and no manually-set userId header. The Gateway must inject User A's id from the JWT."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Credited to the authenticated caller (User A)', function () {",
+                  "    pm.expect(String(pm.response.json().userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Write XP With Forged userId Header (Spoof Neutralized)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{userAToken}}" },
+              { "key": "userId", "value": "{{userBId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":5}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
+            "description": "The core IDOR regression test: authenticated as User A, but the request manually forges a 'userId' header pointing at User B. JwtFilter must overwrite this header before the request is routed downstream, so the write still lands on User A, never User B."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "var json = pm.response.json();",
+                  "pm.test('Forged header is ignored - XP is still credited to User A, the authenticated caller', function () {",
+                  "    pm.expect(String(json.userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "});",
+                  "pm.test('XP was NOT credited to User B, the spoofed target', function () {",
+                  "    pm.expect(String(json.userId)).to.not.eql(pm.collectionVariables.get('userBId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read Another User's Level Data (Open Read By Design)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/level/user/{{userBId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "level", "user", "{{userBId}}"]
+            },
+            "description": "User A reading User B's level/XP data. This is intentionally allowed - a social/leaderboard feature, not an access-control gap - so this must be 200, not 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 (open read by design)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read Another User's Activity Logs (Open Read By Design)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": {
+              "raw": "{{gatewayUrl}}/api/activitylog/user/{{userBId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["api", "activitylog", "user", "{{userBId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 (open read by design)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "No Token - Request Rejected",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
+            "description": "No Authorization header at all. Currently returns 403 (Spring Security's default anonymous-auth behavior, no custom AuthenticationEntryPoint) rather than the semantically-expected 401 - this is pre-existing and unrelated to the IDOR fix, so the test accepts either."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401 or 403 (unauthenticated request rejected)', function () {",
+                  "    pm.expect([401, 403]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Misc",
+      "item": [
+        {
+          "name": "Hello",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/hello", "host": ["{{gatewayUrl}}"], "path": ["api", "hello"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Greets the authenticated caller by email', function () {",
+                  "    pm.expect(pm.response.text()).to.include(pm.collectionVariables.get('userAEmail'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Activity Service (Internal :8081)",
+      "description": "Direct calls to the Activity Service, bypassing the Gateway - reachable in this dev setup since there's no network isolation yet. This service has no security layer of its own: no auth is enforced, and the 'userId' header (used by POST /activitylog/) is entirely self-reported here since there's no JWT to derive it from. Only trustworthy when it arrives via the Gateway.",
+      "item": [
+        {
+          "name": "List Activities (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{activityServiceUrl}}/activity/", "host": ["{{activityServiceUrl}}"], "path": ["activity", ""] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Activity By Name (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{activityServiceUrl}}/activity/{{activityName}}",
+              "host": ["{{activityServiceUrl}}"],
+              "path": ["activity", "{{activityName}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Activity Log (Direct, Manual userId Header)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "userId", "value": "{{userAId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityName\":\"{{activityName}}\",\"startTime\":\"{{logStartTimeDirect}}\",\"endTime\":\"{{logEndTimeDirect}}\",\"notes\":\"Direct internal test\"}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{activityServiceUrl}}/activitylog/", "host": ["{{activityServiceUrl}}"], "path": ["activitylog", ""] },
+            "description": "Same known RNG-bug caveat as the Gateway equivalent in the Activity Log folder applies here."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var now = Date.now();",
+                  "pm.variables.set('logStartTimeDirect', new Date(now - 30 * 60000).toISOString().split('.')[0]);",
+                  "pm.variables.set('logEndTimeDirect', new Date(now).toISOString().split('.')[0]);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 (see request description for the known unrelated failure mode)', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Activity Log By Id - Not Found (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{activityServiceUrl}}/activitylog/999999999",
+              "host": ["{{activityServiceUrl}}"],
+              "path": ["activitylog", "999999999"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Logs For User (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{activityServiceUrl}}/activitylog/user/{{userAId}}",
+              "host": ["{{activityServiceUrl}}"],
+              "path": ["activitylog", "user", "{{userAId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Gamification Service (Internal :8082)",
+      "description": "Direct calls to the Gamification Service, bypassing the Gateway. No security layer of its own - the 'userId' header (used by POST /level) is self-reported here, only trustworthy when it arrives via the Gateway or activity-service's internal Feign call.",
+      "item": [
+        {
+          "name": "Get All Level Trackers (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{gamificationServiceUrl}}/level", "host": ["{{gamificationServiceUrl}}"], "path": ["level"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create-Update XP (Direct, Manual userId Header)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "userId", "value": "{{userAId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"xp\":1}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{gamificationServiceUrl}}/level", "host": ["{{gamificationServiceUrl}}"], "path": ["level"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('userId in response matches the manually-supplied header', function () {",
+                  "    pm.expect(String(pm.response.json().userId)).to.eql(pm.collectionVariables.get('userAId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Level Trackers By User (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gamificationServiceUrl}}/level/user/{{userAId}}",
+              "host": ["{{gamificationServiceUrl}}"],
+              "path": ["level", "user", "{{userAId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Thresholds (Direct)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{gamificationServiceUrl}}/threshold", "host": ["{{gamificationServiceUrl}}"], "path": ["threshold"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lookup Threshold By Composite Key (Direct)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"activityId\":{{thresholdActivityId}},\"level\":2}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{gamificationServiceUrl}}/threshold/activity",
+              "host": ["{{gamificationServiceUrl}}"],
+              "path": ["threshold", "activity"]
+            },
+            "description": "Depends on 'Create Threshold' in the Activity Level Threshold folder having run earlier in the same collection run (folders execute top-to-bottom). Accepts 404 too, in case this folder is run in isolation."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 or 404 (200 if the Activity Level Threshold folder already ran this collection run)', function () {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
