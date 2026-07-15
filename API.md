@@ -326,6 +326,8 @@ Most `404` responses across all three services use Spring's RFC 7807 `ProblemDet
 
 **Through the Gateway, downstream error bodies pass through byte-for-byte unchanged** — including the `instance` field, which still shows the *downstream* service's own path (e.g. `/level/999999`), not the Gateway's `/api/level/999999`. This is because routing is a real reverse proxy (Spring Cloud Gateway), not a hand-rolled wrapper that re-serializes responses. Verified: `GET /api/activity/does-not-exist` and `GET /api/level/999999` both return the exact same `ProblemDetail` body their respective service returns directly.
 
+**`429 Too Many Requests`** is returned by the Gateway's rate limiter when a caller exceeds a route's token bucket (Redis-backed Bucket4j — see [api-gateway README § Rate limiting](api-gateway/README.md#rate-limiting)). Rate-limited responses carry an **`X-RateLimit-Remaining`** header (tokens left in the current window). The proxied-route `429` is emitted by the Gateway filter; the `/auth/**` brute-force guard returns a small JSON body `{"error":"Too many requests"}`. Limits are keyed per authenticated `userId` (falling back to client IP), so one user hitting their limit never throttles another.
+
 ---
 
 ## Known Issues Summary

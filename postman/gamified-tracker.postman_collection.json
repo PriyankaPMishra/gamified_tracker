@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Gamified Tracker API",
-    "description": "Covers the API Gateway's public surface (port 8080), plus direct-hit folders for Activity Service (8081) and Gamification Service (8082) for internal debugging, per API.md. Includes a dedicated 'Security - IDOR Verification' folder exercising the userId-from-JWT fix (spoofed header neutralization, intentionally-open reads).\n\nRun order matters: use Collection Runner top-to-bottom (Auth -> Activity -> Activity Log -> Level Tracker -> Activity Level Threshold -> Security -> Misc -> internal-service folders). Test data (emails, activity name, a synthetic activityId) is generated once per run by the collection-level pre-request script and cached in collection variables, so re-running the whole collection produces fresh, non-colliding data each time.\n\nPrerequisites: `docker-compose up --build` (or the equivalent Maven/local run) so the Gateway (8080), Activity Service (8081), Gamification Service (8082), and Eureka are all up.\n\nKnown caveats baked into these tests:\n- `POST /api/activitylog` (and its internal-service equivalent) can 500 due to a pre-existing, unrelated bug in `ActivityLogServiceImpl`'s XP-bonus roll (`RandomGenerator.getDefault()` failing to find the `L32X64MixRandom` algorithm provider in some JVM/container images). If that request fails, downstream requests that depend on its output (`activityLogId`) are guarded to report a skip rather than crash the run.\n- No-token requests currently return `403`, not the semantically-expected `401` (default Spring Security behavior with no custom `AuthenticationEntryPoint`) - tests accept either.\n- `GET /level/{id}` and `GET /activitylog/{id}` reads are intentionally open to any authenticated user (a social/leaderboard feature, not an access-control gap) - tests assert `200`, not `403`, when a different user reads them.",
+    "description": "Covers the API Gateway's public surface (port 8080), plus direct-hit folders for Activity Service (8081) and Gamification Service (8082) for internal debugging, per API.md. Includes a dedicated 'Security - IDOR Verification' folder exercising the userId-from-JWT fix (spoofed header neutralization, intentionally-open reads).\n\nRun order matters: use Collection Runner top-to-bottom (Auth -> Activity -> Activity Log -> Level Tracker -> Activity Level Threshold -> Security -> Misc -> Rate Limiting -> internal-service folders). The 'Rate Limiting' folder self-loops a single request (via setNextRequest) to trip the Gateway's 429, so it only behaves correctly under the Collection Runner, not a manual single Send. Test data (emails, activity name, a synthetic activityId) is generated once per run by the collection-level pre-request script and cached in collection variables, so re-running the whole collection produces fresh, non-colliding data each time.\n\nPrerequisites: `docker-compose up --build` (or the equivalent Maven/local run) so the Gateway (8080), Activity Service (8081), Gamification Service (8082), and Eureka are all up.\n\nKnown caveats baked into these tests:\n- `POST /api/activitylog` (and its internal-service equivalent) can 500 due to a pre-existing, unrelated bug in `ActivityLogServiceImpl`'s XP-bonus roll (`RandomGenerator.getDefault()` failing to find the `L32X64MixRandom` algorithm provider in some JVM/container images). If that request fails, downstream requests that depend on its output (`activityLogId`) are guarded to report a skip rather than crash the run.\n- No-token requests currently return `403`, not the semantically-expected `401` (default Spring Security behavior with no custom `AuthenticationEntryPoint`) - tests accept either.\n- `GET /level/{id}` and `GET /activitylog/{id}` reads are intentionally open to any authenticated user (a social/leaderboard feature, not an access-control gap) - tests assert `200`, not `403`, when a different user reads them.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -40,7 +40,8 @@
     { "key": "userBId", "value": "", "type": "string" },
     { "key": "activityName", "value": "", "type": "string" },
     { "key": "activityLogId", "value": "", "type": "string" },
-    { "key": "thresholdActivityId", "value": "1", "type": "string" }
+    { "key": "thresholdActivityId", "value": "1", "type": "string" },
+    { "key": "rlAttempts", "value": "0", "type": "string" }
   ],
   "item": [
     {
@@ -1043,6 +1044,56 @@
                   "pm.test('Greets the authenticated caller by email', function () {",
                   "    pm.expect(pm.response.text()).to.include(pm.collectionVariables.get('userAEmail'));",
                   "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Rate Limiting",
+      "description": "Exercises the Gateway's Redis-backed Bucket4j rate limiter. Fires the same proxied request (GET /api/level, on the gamification route) repeatedly as one authenticated user until the per-user token bucket is exhausted and the Gateway returns 429 with an X-RateLimit-Remaining header.\n\nThe single request self-loops via postman.setNextRequest, so this only works in the Collection Runner / Newman - a plain single Send fires it just once. The limit is keyed on the JWT-derived userId (IP fallback), so it throttles only User A's own bucket; it does not touch other users or the separate /auth guard.\n\nCaveats: earlier folders also made /api/level, /api/threshold and /api/notifications calls as User A (the same bucket), so the 429 can appear before a full 100 requests - the loop just runs until it trips, capped at 130 attempts. On rapid re-runs within the same 60s window the bucket may still be partly drained from the previous run (it refills at capacity/period).",
+      "item": [
+        {
+          "name": "Exceed Per-User Limit (429)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{userAToken}}" }],
+            "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
+            "description": "Self-looping request: keeps re-sending itself (postman.setNextRequest) until the Gateway rate limiter answers 429, then asserts the 429 and its X-RateLimit-Remaining header. Run via the Collection Runner - setNextRequest is a no-op on a single Send, so a manual Send will just return 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var MAX_ATTEMPTS = 130;",
+                  "var attempts = parseInt(pm.collectionVariables.get('rlAttempts') || '0') + 1;",
+                  "pm.collectionVariables.set('rlAttempts', String(attempts));",
+                  "",
+                  "if (pm.response.code === 429) {",
+                  "    pm.test('Rate limiter returns 429 once the per-user limit is exceeded', function () {",
+                  "        pm.response.to.have.status(429);",
+                  "    });",
+                  "    pm.test('429 response carries an X-RateLimit-Remaining header', function () {",
+                  "        pm.expect(pm.response.headers.has('X-RateLimit-Remaining')).to.be.true;",
+                  "    });",
+                  "    console.log('Rate limit tripped after ' + attempts + ' request(s) in this run.');",
+                  "    pm.collectionVariables.unset('rlAttempts');",
+                  "} else if (attempts >= MAX_ATTEMPTS) {",
+                  "    pm.test('A 429 is observed before the ' + MAX_ATTEMPTS + '-request cap', function () {",
+                  "        pm.expect.fail('No 429 after ' + MAX_ATTEMPTS + ' requests - is rate limiting enabled and Redis reachable?');",
+                  "    });",
+                  "    pm.collectionVariables.unset('rlAttempts');",
+                  "} else {",
+                  "    // Still under the limit (expect 200) - loop back and fire the same request again.",
+                  "    if (pm.response.code !== 200) {",
+                  "        console.warn('Unexpected pre-limit status ' + pm.response.code + ' on attempt ' + attempts);",
+                  "    }",
+                  "    postman.setNextRequest(pm.info.requestName);",
+                  "}"
                 ]
               }
             }
