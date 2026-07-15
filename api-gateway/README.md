@@ -33,6 +33,7 @@ This is a **real Spring Cloud Gateway** (`spring-cloud-starter-gateway-server-we
 - Java 17, Spring Boot 3.5, Spring Cloud 2025 (Eureka client, **Gateway Server MVC**, LoadBalancer)
 - **Spring Security 6** + **JWT** (`io.jsonwebtoken:jjwt` 0.13), `BCryptPasswordEncoder`
 - Spring Data JPA + PostgreSQL (users only)
+- **Bucket4j + Redis** (Lettuce) — Gateway rate limiting (see [Rate limiting](#rate-limiting))
 - `spring-boot-starter-actuator` (health/info)
 - Entry point: `ApiGatewayApplication` (`@SpringBootApplication`)
 
@@ -141,12 +142,42 @@ See root [`.env.example`](../.env.example).
 
 ## Gateway routes
 
-Declared in `application.yaml` under `spring.cloud.gateway.server.webmvc.routes`:
+Defined in the **Java DSL** — `config/RouteConfiguration.java` as `RouterFunction` beans — **not** in
+`application.yaml`. Routing moved out of YAML so the Bucket4j `rateLimit()` filter could be attached
+(its key resolver is Java-DSL-only); the old declarative `spring.cloud.gateway.server.webmvc.routes`
+block is commented out in `application.yaml` to avoid registering duplicate, un-throttled routes.
 
 | Route id | Predicate | Target | Filters |
 |---|---|---|---|
-| `activity` | `Path=/api/activity/**,/api/activitylog/**` | `lb://activity-service` | Two mutually-exclusive `RewritePath` regexes (not `StripPrefix`) — activity-service's list/create endpoints are mapped at a bare `/`, and Spring 6's `PathPatternParser` no longer treats `/activity` and `/activity/` as equivalent, so the base path needs its trailing slash rewritten in explicitly |
-| `gamification` | `Path=/api/level/**,/api/threshold/**` | `lb://gamification-service` | `StripPrefix=1` |
+| `activity` | `/api/activity/**`, `/api/activitylog/**` | `lb://activity-service` | Two mutually-exclusive `rewritePath(...)` regexes (not `stripPrefix`) — activity-service's list/create endpoints are mapped at a bare `/`, and Spring 6's `PathPatternParser` no longer treats `/activity` and `/activity/` as equivalent, so the base path needs its trailing slash rewritten in explicitly + `rateLimit` |
+| `gamification` | `/api/level/**`, `/api/threshold/**`, `/api/notifications/**` | `lb://gamification-service` | `stripPrefix(1)` + `rateLimit` |
+
+## Rate limiting
+
+Redis-backed request throttling via the Server MVC gateway's **Bucket4j** `rateLimit()` filter
+(`config/RateLimitConfig.java` wires a Lettuce `AsyncProxyManager<String>` over Redis; the two
+proxied routes carry the filter). See [`RATE_LIMITING.md`](../RATE_LIMITING.md) for the full design.
+
+- **Key:** the trusted `userId` header (injected by `JwtFilter`), falling back to client IP —
+  `config/RateLimitKeyResolver.byUserIdOrIp()`. One user hitting their limit never throttles another.
+- **Limits (token bucket, tunable via `RL_*` env / `rate-limit.*` in `application.yaml`):**
+  100 req/min per proxied route; 10 req/min on `/auth/**`.
+- **`/auth/**`** are local controllers, *not* proxied routes, so the gateway filter can't see them —
+  they're guarded separately by `config/AuthRateLimitFilter` (a servlet filter, keyed on IP).
+- **Over the limit → `429 Too Many Requests`** with an `X-RateLimit-Remaining` header (the `/auth`
+  guard returns `{"error":"Too many requests"}`).
+- **Infra:** `redis:7-alpine` in `docker-compose.yml` (gateway `depends_on` it, `service_healthy`).
+
+**Try it** — the Postman collection has a **Rate Limiting** folder that hammers a proxied route
+(as one authenticated user) until it trips `429` (run it via Collection Runner). Or by hand against
+a proxied route with a token:
+```bash
+TOKEN=...   # from POST /auth/register
+for i in $(seq 1 130); do
+  curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/api/level \
+    -H "Authorization: Bearer $TOKEN"
+done | sort | uniq -c        # ~100 × 200, then 429 (default bucket = 100 / 60s, per user)
+```
 
 ## Inter-service dependencies
 

@@ -9,7 +9,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
       timeout: 10s
       retries: 5
@@ -23,6 +23,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+  redis:
+    image: redis:7-alpine
+    container_name: tracker-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   gateway:
     build: ./api-gateway
@@ -33,6 +45,8 @@ services:
       postgres:
         condition: service_healthy
       eureka-server:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     env_file: .env
 

@@ -78,7 +78,7 @@ Real correctness / trust gaps in how the app behaves.
   All four run as **root**, use full **JDK** (not JRE/distroless), have **no `HEALTHCHECK`**, no layered-jar caching (`COPY . .` + full rebuild busts the cache on any change), and a copy-paste `EXPOSE 8080` even in services on 8081/8082. Add a non-root user, JRE base, and dependency layering.
 
 - [ ] 🟢 **Security hardening.**
-  Default JWT secret still committed as a fallback in `api-gateway/.../application.yaml`; no token refresh/revocation, no HTTPS, no CORS (blocks a future frontend), no rate limiting. `JwtFilter` hand-rolls auth and writes 401 directly — consider migrating to `spring-boot-starter-oauth2-resource-server`.
+  Default JWT secret still committed as a fallback in `api-gateway/.../application.yaml`; no token refresh/revocation, no HTTPS, no CORS (blocks a future frontend). ~~no rate limiting~~ ✅ **rate limiting done** — Redis-backed Bucket4j at the Gateway (per-user key, IP fallback; 100 req/min per proxied route, 10 req/min on `/auth/**`; `429` + `X-RateLimit-Remaining`). See [`RATE_LIMITING.md`](RATE_LIMITING.md). `JwtFilter` hand-rolls auth and writes 401 directly — consider migrating to `spring-boot-starter-oauth2-resource-server`.
 
 ---
 
