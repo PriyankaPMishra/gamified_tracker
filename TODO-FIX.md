@@ -35,9 +35,9 @@ Real correctness / trust gaps in how the app behaves.
   Responses expose `level` and `currentLevelXp` but not `xpForNextLevel` / progress % — the most motivating number in a gamified tracker.
   - File: `gamification-service/.../dto/LevelTrackerDto.java` (+ service)
 
-- [ ] 🟢 **Resolve the two competing multipliers.**
-  `xpEarned` uses stored `Activity.xpMultiplier`; `Category.baseXpMultiplier()` is defined but **never called**. Pick a source of truth (per-activity override with category default is a clean model).
-  - Files: `activity-service/.../dao/Category.java`, `.../service/ActivityLogService.java`
+- [x] ~~🟢 **Resolve the two competing multipliers.**~~ ✅ **Fixed** (issue #10).
+  `Activity.effectiveXpMultiplier()` is now the single source of truth: the per-activity `xpMultiplier` when set (`> 0`), otherwise `Category.baseXpMultiplier()` (which now has a caller). `ActivityLogServiceImpl` computes `xpEarned` from it, and activity responses report the effective value. Sentinel `xpMultiplier ≤ 0` means "no override" — which also fixes the latent bug where an activity created without a multiplier was stored as `0.0` and earned 0 XP forever (a negative multiplier now falls back gracefully too, instead of producing negative XP).
+  - Files: `activity-service/.../dao/Activity.java`, `.../dao/Category.java`, `.../service/impl/ActivityLogServiceImpl.java`, `.../service/impl/ActivityServiceImpl.java`
 
 - [x] ~~🟢 **Make the bonus roll visible; stop discarding the level-up event.**~~ ✅ **Fixed.**
   `ActivityLogResponse` gained `bonusApplied`/`bonusMultiplier`/`leveledUp`; `LevelTrackerDto` gained `leveledUp`. **Caveat carried forward from the fix**: these three fields are computed in-memory at write time, not persisted — every `GET` endpoint that returns either DTO hardcodes them to `false`/`1.0`/`false` regardless of the row's real history. Only the specific `POST` response that created the data reflects real values. See [API.md § Known Issues Summary](API.md#known-issues-summary).
