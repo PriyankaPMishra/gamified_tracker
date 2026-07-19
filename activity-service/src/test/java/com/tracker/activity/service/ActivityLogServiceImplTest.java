@@ -217,7 +217,7 @@ public class ActivityLogServiceImplTest {
     @DisplayName("addActivityLogResponseResponseEntity throws InvalidTimeRangeException when endTime is before startTime (no log or outbox row written)")
     void testAddActivityLogResponseResponseEntityEndTimeBeforeStartTime() {
         LocalDateTime now = LocalDateTime.now();
-        ActivityLogRequest request = new ActivityLogRequest("Run", now, now.minusMinutes(10), "notes", now);
+        ActivityLogRequest request = new ActivityLogRequest("Run", now, now.plusMinutes(10), "notes", now);
 
         InvalidTimeRangeException ex = assertThrows(InvalidTimeRangeException.class,
                 () -> activityLogService.addActivityLogResponseResponseEntity(2L, request));
