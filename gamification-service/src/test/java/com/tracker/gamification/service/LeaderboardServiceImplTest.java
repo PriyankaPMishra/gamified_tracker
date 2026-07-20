@@ -29,20 +29,6 @@ public class LeaderboardServiceImplTest {
     @InjectMocks
     private LeaderboardServiceImpl leaderboardService;
 
-    // Spring Data only proxies projection interfaces for real query results, so a mocked
-    // repository needs a plain implementation to hand back instead.
-    private record XpRow(Long userId, Double totalXp) implements UserXpProjection {
-        @Override
-        public Long getUserId() {
-            return userId;
-        }
-
-        @Override
-        public Double getTotalXp() {
-            return totalXp;
-        }
-    }
-
     @Test
     @DisplayName("getGlobalLeaderboard assigns ranks 1..N in the order the repository returns them")
     void getGlobalLeaderboard_assignsSequentialRanks_onFirstPage() {
@@ -156,7 +142,7 @@ public class LeaderboardServiceImplTest {
         when(levelTrackerRepository.countUsersAhead(250.0)).thenReturn(4L);
 
         // Act
-        int rank = leaderboardService.getMyRank(9L);
+        long rank = leaderboardService.getMyRank(9L);
 
         // Assert
         assertEquals(5, rank);
@@ -170,9 +156,23 @@ public class LeaderboardServiceImplTest {
         when(levelTrackerRepository.countUsersAhead(1000.0)).thenReturn(0L);
 
         // Act
-        int rank = leaderboardService.getMyRank(1L);
+        long rank = leaderboardService.getMyRank(1L);
 
         // Assert
         assertEquals(1, rank);
+    }
+
+    // Spring Data only proxies projection interfaces for real query results, so a mocked
+    // repository needs a plain implementation to hand back instead.
+    private record XpRow(Long userId, Double totalXp) implements UserXpProjection {
+        @Override
+        public Long getUserId() {
+            return userId;
+        }
+
+        @Override
+        public Double getTotalXp() {
+            return totalXp;
+        }
     }
 }

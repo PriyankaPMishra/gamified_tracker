@@ -2,7 +2,7 @@ package com.tracker.gamification.controller;
 
 import com.tracker.gamification.dto.LeaderboardEntryDto;
 import com.tracker.gamification.service.LeaderboardService;
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.AllArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -10,9 +10,9 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/leaderboard")
+@AllArgsConstructor
 public class LeaderboardController {
-    @Autowired
-    private LeaderboardService leaderboardService;
+    private final LeaderboardService leaderboardService;
 
     @GetMapping
     public ResponseEntity<List<LeaderboardEntryDto>> getLeaderboard(@RequestParam("page") int page, @RequestParam("size") int size) {
@@ -25,7 +25,7 @@ public class LeaderboardController {
     }
 
     @GetMapping("/me")
-    public ResponseEntity<Integer> getMyRank(@RequestHeader("userId") Long userId) {
+    public ResponseEntity<Long> getMyRank(@RequestHeader("userId") Long userId) {
         return ResponseEntity.ok(leaderboardService.getMyRank(userId));
     }
 }

@@ -33,20 +33,20 @@ public class LeaderboardServiceImpl implements LeaderboardService {
         List<UserXpProjection> ranking =
                 levelTrackerRepository.findActivityRanking(activityId, PageRequest.of(page, size));
 
-        int offset = page * size;
+        long offset = (long) page * size;
         return IntStream.range(0, ranking.size())
                 .mapToObj(i -> mapToDto(ranking.get(i), offset + i + 1))
                 .toList();
     }
 
     @Override
-    public int getMyRank(Long userId) {
+    public Long getMyRank(Long userId) {
         double myXp = levelTrackerRepository.getTotalXpByUserId(userId); // COALESCE(...,0), never null
         long ahead = levelTrackerRepository.countUsersAhead(myXp);
-        return (int) (ahead + 1);
+        return (ahead + 1);
     }
 
-    private LeaderboardEntryDto mapToDto(UserXpProjection projection, int rank) {
+    private LeaderboardEntryDto mapToDto(UserXpProjection projection, long rank) {
         double totalXp = projection.getTotalXp() != null ? projection.getTotalXp() : 0.0;
         return new LeaderboardEntryDto(rank, projection.getUserId(), totalXp);
     }

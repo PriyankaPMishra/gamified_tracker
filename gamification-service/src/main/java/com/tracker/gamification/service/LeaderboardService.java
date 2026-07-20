@@ -10,5 +10,5 @@ public interface LeaderboardService {
 
     List<LeaderboardEntryDto> getActivityLeaderboard(Long activityId, int page, int size);
 
-    int getMyRank(Long userId);
+    Long getMyRank(Long userId);
 }
