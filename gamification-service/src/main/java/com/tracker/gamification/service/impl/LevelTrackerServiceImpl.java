@@ -8,6 +8,7 @@ import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
 import com.tracker.gamification.repository.*;
 import com.tracker.gamification.service.LevelTrackerService;
+import com.tracker.gamification.service.OverallLevelService;
 import lombok.AllArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -26,7 +27,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final ActivityLevelThresholdRepository activityLevelThresholdRepository;
     private final LevelTrackerArchiveRepository levelTrackerArchiveRepository;
     private final LevelUpEventRepository levelUpEventRepository;
-    private final OverallLevelThresholdRepository overallLevelThresholdRepository;
+    private final OverallLevelService overallLevelService;
 
     @Override
     public List<LevelTrackerDto> findByUserId(Long userId) {
@@ -172,8 +173,11 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         );
     }
 
-    int overallLevelFor(double Xp) {
-        return overallLevelThresholdRepository.findReachedLevel(Xp, PageRequest.of(0, 1)).orElseThrow(() -> new NoSuchElementException("XP out of range"));
+    // Not yet called from save() — wiring live overall-level feedback into the XP transaction
+    // (TODO §B.7) needs a partial UserRank update (totalXp + overallLevel only, leaving
+    // rank/percentile for the next batch), which is a separate decision from this delegation fix.
+    int overallLevelFor(double totalXp) {
+        return overallLevelService.overallLevelFor(totalXp);
     }
 
     private LevelTrackerDto mapToDto(LevelTracker entity) {
