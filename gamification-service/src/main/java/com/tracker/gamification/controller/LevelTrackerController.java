@@ -13,8 +13,8 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@Validated
 @RequestMapping("/level")
+@Validated
 public class LevelTrackerController {
 
     @Autowired
@@ -26,22 +26,29 @@ public class LevelTrackerController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<LevelTrackerDto> getLevelTrackerById(@PathVariable("id") @Positive(message = "id cannot be negative or zero") Long id) {
+    public ResponseEntity<LevelTrackerDto> getLevelTrackerById(@PathVariable @Positive(message = "id cannot be negative or zero") Long id) {
         return ResponseEntity.ok(levelTrackerService.findById(id));
     }
 
+    // IDOR fix: userId now comes from the trusted "userId" header (injected by the
+    // gateway, forwarded by activity-service's internal Feign call), not from the body.
+    // @PostMapping
+    // public ResponseEntity<LevelTrackerDto> createLevelTracker(@RequestBody LevelTrackerRequestDTO levelTrackerRequestDTO) {
+    //     return ResponseEntity.ok(levelTrackerService.save(levelTrackerRequestDTO));
+    // }
     @PostMapping
-    public ResponseEntity<LevelTrackerDto> createLevelTracker(@Valid @RequestBody LevelTrackerRequestDTO levelTrackerRequestDTO) {
-        return ResponseEntity.ok(levelTrackerService.save(levelTrackerRequestDTO));
+    public ResponseEntity<LevelTrackerDto> createLevelTracker(@RequestHeader("userId") @Positive(message = "id cannot be negative or zero") Long userId,
+                                                               @Valid @RequestBody LevelTrackerRequestDTO levelTrackerRequestDTO) {
+        return ResponseEntity.ok(levelTrackerService.save(userId, levelTrackerRequestDTO));
     }
 
     @GetMapping("/user/{userId}")
-    public ResponseEntity<List<LevelTrackerDto>> getLevelTrackerByUserId(@PathVariable @Positive(message = "user id cannot be negative or zero") Long userId) {
+    public ResponseEntity<List<LevelTrackerDto>> getLevelTrackerByUserId(@PathVariable @Positive(message = "id cannot be negative or zero") Long userId) {
         return ResponseEntity.ok(levelTrackerService.findByUserId(userId));
     }
 
     @GetMapping("/activity/{activityId}")
-    public ResponseEntity<List<LevelTrackerDto>> getLevelTrackerByActivityId(@PathVariable @Positive(message = "activity id cannot be negative or zero") Long activityId) {
+    public ResponseEntity<List<LevelTrackerDto>> getLevelTrackerByActivityId(@PathVariable @Positive(message = "id cannot be negative or zero") Long activityId) {
         return ResponseEntity.ok(levelTrackerService.findByActivityId(activityId));
     }
 }

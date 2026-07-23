@@ -6,6 +6,19 @@ spring:
     ansi:
       enabled: ALWAYS
 
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1000ms
+        default-requeue-rejected: false
+
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/tracker_db}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
@@ -15,11 +28,20 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
+    # data.sql normally runs before Hibernate creates the schema; deferring it lets
+    # ddl-auto finish first so the achievement table exists when the seed inserts run.
+    defer-datasource-initialization: true
     show-sql: true
     properties:
       hibernate:
         format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  sql:
+    init:
+      # Boot only auto-runs schema/data scripts for embedded databases by default;
+      # this datasource is Postgres, so data.sql needs to be opted in explicitly.
+      mode: always
 
   jackson:
     serialization:
@@ -28,8 +50,6 @@ spring:
 server:
   port: 8082
 
-
-
 # Logging (very useful during dev)
 logging:
   level:
@@ -37,18 +57,28 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
   pattern:
-    console: "%clr(%d{yyyy-MM-dd HH:mm:ss}){faint} %clr(%5p) %clr(${PID:- }){magenta} %clr(---){faint} %clr([%15.15t]){faint} %clr(%-40.40logger{39}){cyan} : %m%n%wEx"
+    console: "%clr(%d{yyyy-MM-dd HH:mm:ss}){faint} %clr(%5p) %clr(${PID:- }){magenta} %clr(---){faint} %clr([%15.15t]){faint} %clr([%X{traceId:-},%X{spanId:-}]){yellow} %clr(%-40.40logger{39}){cyan} : %m%n%wEx"
 
-# Actuator (optional but recommended)
+# Actuator
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus,metrics
   endpoint:
     health:
       probes:
         enabled: true
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_BASE_URL:http://localhost:9411}/api/v2/spans
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 # Swagger/OpenAPI Configuration
 springdoc:
@@ -72,3 +102,15 @@ eureka:
     metadata-map:
       zone: ap-south-1
       version: v1
+
+messaging:
+  exchange: activity.events
+  routing-key: activity.logged
+  queue: gamification.activity-logged.q
+  dlx: activity.events.dlx
+  dlq: gamification.activity-logged.dlq
+
+ranking:
+  # Cadence for RankRecomputeServiceImpl's scheduled re-rank; externalized so it can be
+  # tuned per environment (e.g. faster for local/demo) without a rebuild.
+  recompute-interval-ms: 300000

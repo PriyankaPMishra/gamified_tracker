@@ -1,19 +1,24 @@
 package com.tracker.activity.dto;
 
-import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.Future;
+import jakarta.validation.constraints.FutureOrPresent;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 
 import java.time.LocalDateTime;
 
 public record ActivityLogRequest(
-        @NotNull(message = "user id is required")
-        @Positive(message = "user id cannot be negative or zero")
-        Long userId,
-        @NotBlank(message = "activity name is required")
+        @NotBlank(message = "Activity name is required")
         String activityName,
-        @FutureOrPresent
+
+        @NotNull(message = "Start time is required")
+        @FutureOrPresent(message = "start Time should be future")
         LocalDateTime startTime,
-        @Future
+
+        @NotNull(message = "End time is required")
+        @Future(message = "end time should be future")
         LocalDateTime endTime,
+
         String notes,
         LocalDateTime createdAt
 ) {

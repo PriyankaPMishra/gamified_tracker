@@ -4,11 +4,13 @@ import com.tracker.gamification.dao.ActivityLevelThreshold;
 import com.tracker.gamification.dao.ActivityLevelThresholdId;
 import com.tracker.gamification.dao.LevelTracker;
 import com.tracker.gamification.dao.LevelTrackerArchive;
+import com.tracker.gamification.dao.LevelUpEvent;
 import com.tracker.gamification.dto.LevelTrackerDto;
 import com.tracker.gamification.dto.LevelTrackerRequestDTO;
 import com.tracker.gamification.repository.ActivityLevelThresholdRepository;
 import com.tracker.gamification.repository.LevelTrackerArchiveRepository;
 import com.tracker.gamification.repository.LevelTrackerRepository;
+import com.tracker.gamification.repository.LevelUpEventRepository;
 import com.tracker.gamification.service.impl.LevelTrackerServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,8 +40,104 @@ public class LevelTrackerServiceImplTest {
     @Mock
     private LevelTrackerArchiveRepository levelTrackerArchiveRepository;
 
+    @Mock
+    private LevelUpEventRepository levelUpEventRepository;
+
     @InjectMocks
     private LevelTrackerServiceImpl levelTrackerService;
+
+    @Test
+    @DisplayName("save persists a LevelUpEvent when a level threshold is crossed")
+    void save_persistsLevelUpEvent_whenThresholdCrossed() {
+        // Arrange — same setup as testSaveLevelUp: 300 XP crosses the level-2 threshold (200)
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 300.0);
+
+        ActivityLevelThresholdId levelId = ActivityLevelThresholdId.builder()
+                .activityId(1L)
+                .level(2)
+                .build();
+
+        ActivityLevelThreshold levelThreshold = ActivityLevelThreshold.builder()
+                .id(levelId)
+                .xpRequired(200.0)
+                .build();
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L)
+                .userId(1L)
+                .activityId(1L)
+                .totalXp(0.0)
+                .currentLevelXp(0.0)
+                .build();
+
+        LevelTracker leveledUpTracker = LevelTracker.builder()
+                .id(1L)
+                .userId(1L)
+                .activityId(1L)
+                .level(2)
+                .totalXp(300.0)
+                .currentLevelXp(100.0)
+                .build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of(levelThreshold));
+        when(levelTrackerRepository.save(any(LevelTracker.class)))
+                .thenReturn(leveledUpTracker);
+
+        // Act
+        levelTrackerService.save(1L, request);
+
+        // Assert — a level-up event is emitted, carrying the caller, old/new level, XP, and unread state
+        verify(levelUpEventRepository).save(argThat((LevelUpEvent e) ->
+                e.getUserId().equals(1L)
+                        && e.getActivityId().equals(1L)
+                        && e.getOldLevel() == null // freshTracker had no level set yet
+                        && e.getNewLevel() == 2
+                        && e.getTotalXp() == 300.0
+                        && e.getCurrentLevelXp() == 100.0
+                        && !e.isRead()));
+    }
+
+    @Test
+    @DisplayName("save does NOT persist a LevelUpEvent when the tracker is still in progress")
+    void save_doesNotPersistEvent_whenInProgress() {
+        // Arrange — same setup as testSaveNewTracker: no threshold reached, stays level 1
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 100.0);
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L)
+                .userId(1L)
+                .activityId(1L)
+                .totalXp(0.0)
+                .currentLevelXp(0.0)
+                .build();
+
+        LevelTracker savedTracker = LevelTracker.builder()
+                .id(1L)
+                .userId(1L)
+                .activityId(1L)
+                .level(1)
+                .totalXp(100.0)
+                .currentLevelXp(100.0)
+                .build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L))
+                .thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(100.0), any(Pageable.class)))
+                .thenReturn(List.of());
+        when(levelTrackerRepository.save(any(LevelTracker.class)))
+                .thenReturn(savedTracker);
+
+        // Act
+        levelTrackerService.save(1L, request);
+
+        // Assert — no level-up, so no event
+        verify(levelUpEventRepository, never()).save(any());
+    }
 
     @Test
     @DisplayName("findByUserId returns mapped list of LevelTrackerDtos")
@@ -233,7 +331,9 @@ public class LevelTrackerServiceImplTest {
     @DisplayName("save creates new tracker with initial level when no existing tracker")
     void testSaveNewTracker() {
         // Arrange
-        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 100.0);
+        // IDOR fix: userId no longer lives on the DTO — it's a separate trusted argument.
+        // LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 100.0);
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 100.0);
 
         // insertIfAbsent atomically creates the zero-state row when none existed
         LevelTracker freshTracker = LevelTracker.builder()
@@ -267,7 +367,8 @@ public class LevelTrackerServiceImplTest {
                 .thenReturn(savedTracker);
 
         // Act
-        LevelTrackerDto result = levelTrackerService.save(request);
+        // LevelTrackerDto result = levelTrackerService.save(request);
+        LevelTrackerDto result = levelTrackerService.save(1L, request);
 
         // Assert
         assertNotNull(result);
@@ -286,7 +387,8 @@ public class LevelTrackerServiceImplTest {
     @DisplayName("save updates existing tracker, archives previous state, and accumulates XP")
     void testSaveExistingTracker() {
         // Arrange
-        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 50.0);
+        // LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 50.0);
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 50.0);
 
         LevelTracker existingTracker = LevelTracker.builder()
                 .id(1L)
@@ -320,7 +422,8 @@ public class LevelTrackerServiceImplTest {
                 .thenReturn(updatedTracker);
 
         // Act
-        LevelTrackerDto result = levelTrackerService.save(request);
+        // LevelTrackerDto result = levelTrackerService.save(request);
+        LevelTrackerDto result = levelTrackerService.save(1L, request);
 
         // Assert
         assertNotNull(result);
@@ -342,7 +445,8 @@ public class LevelTrackerServiceImplTest {
     @DisplayName("save levels up tracker when threshold is reached")
     void testSaveLevelUp() {
         // Arrange
-        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 300.0);
+        // LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 300.0);
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 300.0);
 
         ActivityLevelThresholdId levelId = ActivityLevelThresholdId.builder()
                 .activityId(1L)
@@ -385,7 +489,8 @@ public class LevelTrackerServiceImplTest {
                 .thenReturn(leveledUpTracker);
 
         // Act
-        LevelTrackerDto result = levelTrackerService.save(request);
+        // LevelTrackerDto result = levelTrackerService.save(request);
+        LevelTrackerDto result = levelTrackerService.save(1L, request);
 
         // Assert
         assertNotNull(result);
@@ -406,7 +511,8 @@ public class LevelTrackerServiceImplTest {
     @DisplayName("save with zero XP creates tracker at level 1")
     void testSaveZeroXp() {
         // Arrange
-        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 0.0);
+        // LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 1L, 0.0);
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 0.0);
 
         LevelTracker freshTracker = LevelTracker.builder()
                 .id(1L)
@@ -439,7 +545,8 @@ public class LevelTrackerServiceImplTest {
                 .thenReturn(savedTracker);
 
         // Act
-        LevelTrackerDto result = levelTrackerService.save(request);
+        // LevelTrackerDto result = levelTrackerService.save(request);
+        LevelTrackerDto result = levelTrackerService.save(1L, request);
 
         // Assert
         assertNotNull(result);

@@ -5,6 +5,32 @@ spring:
   output:
     ansi:
       enabled: ALWAYS
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:redis}   # "localhost" when running the gateway outside Docker
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+  # Routes moved to Java DSL (config/RouteConfiguration.java) so the Bucket4j rateLimit()
+  # filter can be attached (its key resolver is Java-DSL-only). Keeping these declarative
+  # YAML routes here as well would register duplicate routes for the same paths and shadow
+  # the rate-limited DSL ones — so they are commented out, not deleted (repo convention).
+  # cloud:
+  #   gateway:
+  #     server:
+  #       webmvc:
+  #         routes:
+  #           - id: activity
+  #             uri: lb://activity-service
+  #             predicates:
+  #               - Path=/api/activity/**,/api/activitylog/**
+  #             filters:
+  #               - RewritePath=^/api/(activity|activitylog)/?$, /$1/
+  #               - RewritePath=^/api/(.*)$, /$1
+  #           - id: gamification
+  #             uri: lb://gamification-service
+  #             predicates:
+  #               - Path=/api/level/**,/api/threshold/**,/api/notifications/**
+  #             filters:
+  #               - StripPrefix=1
 
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/tracker_db}
@@ -40,18 +66,28 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
   pattern:
-    console: "%clr(%d{yyyy-MM-dd HH:mm:ss}){faint} %clr(%5p) %clr(${PID:- }){magenta} %clr(---){faint} %clr([%15.15t]){faint} %clr(%-40.40logger{39}){cyan} : %m%n%wEx"
+    console: "%clr(%d{yyyy-MM-dd HH:mm:ss}){faint} %clr(%5p) %clr(${PID:- }){magenta} %clr(---){faint} %clr([%15.15t]){faint} %clr([%X{traceId:-},%X{spanId:-}]){yellow} %clr(%-40.40logger{39}){cyan} : %m%n%wEx"
 
-# Actuator (optional but recommended)
+# Actuator
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus,metrics
   endpoint:
     health:
       probes:
         enabled: true
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_BASE_URL:http://localhost:9411}/api/v2/spans
+  metrics:
+    tags:
+      application: ${spring.application.name}
 
 # Swagger/OpenAPI Configuration
 springdoc:
@@ -83,4 +119,14 @@ eureka:
 
 
 
-# Rate limiting configuration (optional)
+# Rate limiting (token bucket: `capacity` tokens refilled every `period-seconds`)
+rate-limit:
+  activity:                                    # proxied /api/activity/**, /api/activitylog/**
+    capacity: ${RL_ACTIVITY_CAPACITY:100}
+    period-seconds: ${RL_ACTIVITY_PERIOD:60}
+  gamification:                                # proxied /api/level/**, /api/threshold/**, /api/notifications/**
+    capacity: ${RL_GAMIFICATION_CAPACITY:100}
+    period-seconds: ${RL_GAMIFICATION_PERIOD:60}
+  auth:                                        # local /auth/** brute-force guard (AuthRateLimitFilter)
+    capacity: ${RL_AUTH_CAPACITY:10}
+    period-seconds: ${RL_AUTH_PERIOD:60}
