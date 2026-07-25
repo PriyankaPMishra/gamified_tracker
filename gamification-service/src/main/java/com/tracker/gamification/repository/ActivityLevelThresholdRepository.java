@@ -49,4 +49,21 @@ public interface ActivityLevelThresholdRepository extends JpaRepository<Activity
             ORDER BY a.id.activityId ASC, a.id.level ASC
             """)
     List<ActivityLevelThreshold> findAllForActivities(@Param("activityIds") Collection<Long> activityIds);
+
+    // Precedence guard for the default level curve: an activity with ANY explicit row uses only
+    // its own rows, never the formula fallback (LevelTrackerServiceImpl.resolveLevel).
+    @Query("""
+            SELECT COUNT(a)
+            FROM ActivityLevelThreshold a
+            WHERE a.id.activityId = :activityId
+            """)
+    long countForActivity(@Param("activityId") Long activityId);
+
+    @Query("""
+            SELECT a
+            FROM ActivityLevelThreshold a
+            WHERE a.id.activityId = :activityId
+            ORDER BY a.id.level ASC
+            """)
+    List<ActivityLevelThreshold> findAllForActivity(@Param("activityId") Long activityId);
 }

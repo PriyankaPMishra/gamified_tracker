@@ -18,6 +18,7 @@
           "    pm.collectionVariables.set('adminEmail', 'postman.admin.' + ts + '@example.com');",
           "    pm.collectionVariables.set('activityName', 'PostmanActivity_' + ts);",
           "    pm.collectionVariables.set('thresholdActivityId', String((ts % 100000) + 1));",
+          "    pm.collectionVariables.set('curveActivityId', String(((ts + 50000) % 100000) + 1));",
           "}"
         ]
       }
