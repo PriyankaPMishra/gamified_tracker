@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 
 @Repository
@@ -25,4 +26,27 @@ public interface ActivityLevelThresholdRepository extends JpaRepository<Activity
             @Param("xp") double xp,
             Pageable pageable
     );
+
+    // Mirror of findReachedLevels: the LOWEST level whose xpRequired is still ahead of the user.
+    @Query("""
+            SELECT a
+            FROM ActivityLevelThreshold a
+            WHERE a.id.activityId = :activityId
+            AND a.xpRequired > :xp
+            ORDER BY a.id.level ASC
+            """)
+    List<ActivityLevelThreshold> findNextLevels(
+            @Param("activityId") Long activityId,
+            @Param("xp") double xp,
+            Pageable pageable
+    );
+
+    // Batch form for list endpoints: one query for every activity in the result set instead of N.
+    @Query("""
+            SELECT a
+            FROM ActivityLevelThreshold a
+            WHERE a.id.activityId IN :activityIds
+            ORDER BY a.id.activityId ASC, a.id.level ASC
+            """)
+    List<ActivityLevelThreshold> findAllForActivities(@Param("activityIds") Collection<Long> activityIds);
 }

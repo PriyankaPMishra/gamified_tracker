@@ -554,6 +554,108 @@ public class LevelTrackerServiceImplTest {
         assertEquals(0.0, result.totalXp());
         verify(levelTrackerRepository).save(any(LevelTracker.class));
     }
+
+    @Test
+    @DisplayName("findById exposes xpForNextLevel and progressPercent from the next threshold")
+    void testFindById_includesProgress() {
+        // Arrange
+        Long id = 1L;
+        LevelTracker tracker = LevelTracker.builder()
+                .id(id).userId(1L).activityId(1L)
+                .level(3).totalXp(640.0).currentLevelXp(140.0)
+                .build();
+
+        ActivityLevelThresholdId nextId = ActivityLevelThresholdId.builder().activityId(1L).level(4).build();
+        ActivityLevelThreshold next = ActivityLevelThreshold.builder().id(nextId).xpRequired(1000.0).build();
+
+        when(levelTrackerRepository.findById(id)).thenReturn(Optional.of(tracker));
+        when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(640.0), any(Pageable.class)))
+                .thenReturn(List.of(next));
+
+        // Act
+        LevelTrackerDto result = levelTrackerService.findById(id);
+
+        // Assert
+        assertEquals(360.0, result.xpForNextLevel());
+        assertEquals(28.0, result.progressPercent());
+    }
+
+    @Test
+    @DisplayName("findById reports max-level progress when no threshold is ahead")
+    void testFindById_maxLevel() {
+        // Arrange
+        Long id = 1L;
+        LevelTracker tracker = LevelTracker.builder()
+                .id(id).userId(1L).activityId(1L)
+                .level(10).totalXp(50000.0).currentLevelXp(1000.0)
+                .build();
+
+        when(levelTrackerRepository.findById(id)).thenReturn(Optional.of(tracker));
+        when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(50000.0), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        // Act
+        LevelTrackerDto result = levelTrackerService.findById(id);
+
+        // Assert
+        assertEquals(0.0, result.xpForNextLevel());
+        assertEquals(100.0, result.progressPercent());
+    }
+
+    @Test
+    @DisplayName("findByUserId batches the threshold lookup instead of querying per tracker")
+    void testFindByUserId_batchesThresholdLookup() {
+        // Arrange
+        Long userId = 1L;
+        LevelTracker tracker1 = LevelTracker.builder()
+                .id(1L).userId(userId).activityId(1L).level(3).totalXp(640.0).currentLevelXp(140.0).build();
+        LevelTracker tracker2 = LevelTracker.builder()
+                .id(2L).userId(userId).activityId(2L).level(2).totalXp(200.0).currentLevelXp(100.0).build();
+
+        when(levelTrackerRepository.findAllByUserId(userId)).thenReturn(List.of(tracker1, tracker2));
+        when(activityLevelThresholdRepository.findAllForActivities(anyCollection())).thenReturn(List.of());
+
+        // Act
+        List<LevelTrackerDto> results = levelTrackerService.findByUserId(userId);
+
+        // Assert — batched lookup called exactly once; the per-row lookup is never used on this path
+        assertEquals(2, results.size());
+        verify(activityLevelThresholdRepository, times(1)).findAllForActivities(anyCollection());
+        verify(activityLevelThresholdRepository, never()).findNextLevels(anyLong(), anyDouble(), any());
+    }
+
+    @Test
+    @DisplayName("save returns progress toward the next level alongside the persisted tracker")
+    void testSave_includesProgress() {
+        // Arrange — same setup as testSaveLevelUp: 300 XP crosses the level-2 threshold (200)
+        LevelTrackerRequestDTO request = new LevelTrackerRequestDTO(1L, 300.0);
+
+        ActivityLevelThresholdId levelId = ActivityLevelThresholdId.builder().activityId(1L).level(2).build();
+        ActivityLevelThreshold levelThreshold = ActivityLevelThreshold.builder().id(levelId).xpRequired(200.0).build();
+
+        ActivityLevelThresholdId nextId = ActivityLevelThresholdId.builder().activityId(1L).level(3).build();
+        ActivityLevelThreshold nextThreshold = ActivityLevelThreshold.builder().id(nextId).xpRequired(500.0).build();
+
+        LevelTracker freshTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).totalXp(0.0).currentLevelXp(0.0).build();
+        LevelTracker leveledUpTracker = LevelTracker.builder()
+                .id(1L).userId(1L).activityId(1L).level(2).totalXp(300.0).currentLevelXp(100.0).build();
+
+        when(levelTrackerRepository.insertIfAbsent(1L, 1L)).thenReturn(1);
+        when(levelTrackerRepository.findByUserIdAndActivityIdForUpdate(1L, 1L)).thenReturn(Optional.of(freshTracker));
+        when(activityLevelThresholdRepository.findReachedLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of(levelThreshold));
+        when(levelTrackerRepository.save(any(LevelTracker.class))).thenReturn(leveledUpTracker);
+        when(activityLevelThresholdRepository.findNextLevels(eq(1L), eq(300.0), any(Pageable.class)))
+                .thenReturn(List.of(nextThreshold));
+
+        // Act
+        LevelTrackerDto result = levelTrackerService.save(1L, request);
+
+        // Assert — bandStart = 300 - 100 = 200, span = 500 - 200 = 300, remaining = 200, percent = 33.33
+        assertEquals(200.0, result.xpForNextLevel());
+        assertEquals(33.33, result.progressPercent());
+    }
 }
 
 
