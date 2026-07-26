@@ -1,6 +1,6 @@
 # Gamified Tracker
 
-A microservices-based activity tracker with gamification. Log activities, earn XP, and level up — built with Spring Boot, Spring Cloud, and PostgreSQL.
+A microservices-based activity tracker with gamification. Log activities, earn XP, maintain streaks and level up — built with Spring Boot, Spring Cloud, and PostgreSQL.
 
 ## How it works
 
@@ -122,6 +122,7 @@ Open issues are labelled by priority and type. New to the project? Start with a
 [**good first issue**](https://github.com/prashant-singh-2001/gamified_tracker/contribute).
 
 Workflow: pick an issue → branch → open a PR that references it (`Fixes #<n>`).
+See [CONTRIBUTING](./CONTRIBUTING.md) for more know how.
 
 ### Pull Request Validation Workflow
 
@@ -129,10 +130,6 @@ This repository uses **GitHub Actions** to validate Pull Requests before they ar
 
 1. Fork this repository.
 2. Clone your fork and create a feature branch.
-
-   ```bash
-   git checkout -b feature/my-feature
-   ```
 
 3. Implement your changes and push the branch to your fork.
 
