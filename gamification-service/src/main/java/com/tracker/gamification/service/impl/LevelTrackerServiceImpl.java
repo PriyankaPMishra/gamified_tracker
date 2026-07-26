@@ -4,6 +4,7 @@ import com.tracker.gamification.dao.ActivityLevelThreshold;
 import com.tracker.gamification.dao.LevelTracker;
 import com.tracker.gamification.dao.LevelTrackerArchive;
 import com.tracker.gamification.dao.LevelUpEvent;
+import com.tracker.gamification.domain.LevelCurve;
 import com.tracker.gamification.domain.LevelOutcome;
 import com.tracker.gamification.domain.LevelProgress;
 import com.tracker.gamification.dto.LevelTrackerDto;
@@ -36,6 +37,7 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
     private final LevelTrackerArchiveRepository levelTrackerArchiveRepository;
     private final LevelUpEventRepository levelUpEventRepository;
     private final OverallLevelService overallLevelService;
+    private final LevelCurve levelCurve;
 
     @Override
     public List<LevelTrackerDto> findByUserId(Long userId) {
@@ -98,10 +100,16 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         }
 
         Integer oldLevel = tracker.getLevel();
+        int previousLevel = oldLevel == null ? 1 : oldLevel;
 
         tracker.setTotalXp(tracker.getTotalXp() + dto.xp());
         tracker.setLogCount(tracker.getLogCount() + 1);
-        boolean leveledUp = applyLevel(tracker);
+        applyLevel(tracker);
+
+        // leveledUp is a real comparison against the level BEFORE this save, not a side effect of
+        // which LevelOutcome branch resolveLevel took — see resolveLevel's comment for why those
+        // two things are no longer the same signal once the default curve is in play.
+        boolean leveledUp = tracker.getLevel() > previousLevel;
 
         var saved = levelTrackerRepository.save(tracker);
 
@@ -134,34 +142,49 @@ public class LevelTrackerServiceImpl implements LevelTrackerService {
         );
     }
 
-    private boolean applyLevel(LevelTracker levelTracker) {
-        var reachedLevels =
-                activityLevelThresholdRepository
-                        .findReachedLevels(
-                                levelTracker.getActivityId(),
-                                levelTracker.getTotalXp(),
-                                PageRequest.of(0, 1)
-                        );
+    private void applyLevel(LevelTracker levelTracker) {
+        LevelOutcome outcome = resolveLevel(levelTracker.getActivityId(), levelTracker.getTotalXp());
 
-        LevelOutcome outcome = reachedLevels.isEmpty()
-                ? new LevelOutcome.InProgress(1, levelTracker.getTotalXp())
-                : new LevelOutcome.LeveledUp(
-                reachedLevels.get(0).getId().getLevel(),
-                levelTracker.getTotalXp() - reachedLevels.get(0).getXpRequired()
-        );
-
-        boolean leveledUp = false;
         if (outcome instanceof LevelOutcome.LeveledUp up) {
             levelTracker.setLevel(up.level());
             levelTracker.setCurrentLevelXp(up.currentLevelXp());
-            leveledUp = true;
         } else if (outcome instanceof LevelOutcome.InProgress ip) {
             levelTracker.setLevel(ip.level());
             levelTracker.setCurrentLevelXp(ip.currentLevelXp());
-            leveledUp = false;
+        }
+    }
+
+    // NOTE on meaning: LeveledUp here means "an explicit activity_level_threshold row was reached" —
+    // it does NOT mean the user's level increased on this save (save() computes that separately by
+    // comparing against the level captured before mutation). InProgress covers everything else:
+    // genuinely below the activity's own next explicit threshold, OR resolved via the default curve
+    // when the activity has no explicit rows at all.
+    private LevelOutcome resolveLevel(Long activityId, double totalXp) {
+        var reachedLevels = activityLevelThresholdRepository.findReachedLevels(
+                activityId, totalXp, PageRequest.of(0, 1));
+
+        if (!reachedLevels.isEmpty()) {
+            var reached = reachedLevels.get(0);
+            return new LevelOutcome.LeveledUp(
+                    reached.getId().getLevel(),
+                    totalXp - reached.getXpRequired());
         }
 
-        return leveledUp;
+        // No explicit threshold reached. Only fall back to the default curve when this activity has
+        // NO threshold rows at all — an activity with even one row must stay on its own data forever,
+        // never blend in formula-derived levels (see the precedence decision in
+        // DEFAULT_LEVEL_CURVE_TODO.md). countForActivity is queried only on this empty-result path,
+        // so the common explicit-threshold case costs exactly the same number of queries as before.
+        boolean useDefaultCurve = levelCurve.isEnabled()
+                && activityLevelThresholdRepository.countForActivity(activityId) == 0;
+
+        if (useDefaultCurve) {
+            return new LevelOutcome.InProgress(
+                    levelCurve.levelFor(totalXp),
+                    levelCurve.currentLevelXpFor(totalXp));
+        }
+
+        return new LevelOutcome.InProgress(1, totalXp);
     }
 
     // OLD:
