@@ -1185,7 +1185,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
-            "description": "The core IDOR regression test: authenticated as User A, but the request manually forges a 'userId' header pointing at User B. JwtFilter must overwrite this header before the request is routed downstream, so the write still lands on User A, never User B."
+            "description": "The core IDOR regression test: authenticated as User A, but the request manually forges a 'userId' header pointing at User B. UserIdHeaderFilter must overwrite this header before the request is routed downstream, so the write still lands on User A, never User B."
           },
           "event": [
             {
@@ -1291,7 +1291,7 @@
             "method": "GET",
             "header": [],
             "url": { "raw": "{{gatewayUrl}}/api/level", "host": ["{{gatewayUrl}}"], "path": ["api", "level"] },
-            "description": "No Authorization header at all. Currently returns 403 (Spring Security's default anonymous-auth behavior, no custom AuthenticationEntryPoint) rather than the semantically-expected 401 - this is pre-existing and unrelated to the IDOR fix, so the test accepts either."
+            "description": "No Authorization header at all. With spring-boot-starter-oauth2-resource-server configured, Spring Security's BearerTokenAuthenticationEntryPoint handles this and returns a clean 401 with a WWW-Authenticate header - this replaced the old ambiguous 403 fallback."
           },
           "event": [
             {
@@ -1299,8 +1299,11 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status is 401 or 403 (unauthenticated request rejected)', function () {",
-                  "    pm.expect([401, 403]).to.include(pm.response.code);",
+                  "pm.test('Status is 401 (unauthenticated request rejected)', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test('WWW-Authenticate header present, identifying this as a Bearer-scheme resource server', function () {",
+                  "    pm.expect(pm.response.headers.has('WWW-Authenticate')).to.be.true;",
                   "});"
                 ]
               }
