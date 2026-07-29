@@ -107,7 +107,30 @@ The working pattern for this project is:
 - **CODEOWNERS** will auto-request the relevant reviewer based on the paths
   you've touched — no need to manually tag people unless you want extra
   eyes.
-- **Pipeline**: GitHub Actions CI must pass before merge.
+- **Pipeline**: GitHub Actions CI must pass before merge. See below for a manual workaround (whenever needed).
+
+#### Pull Request Validation Workflow
+
+This repository uses **GitHub Actions** to validate Pull Requests before they are merged into `main`.
+
+1. Fork this repository.
+2. Clone your fork and create a feature branch.
+
+3. Implement your changes and push the branch to your fork.
+
+4. Open a Pull Request from your feature branch to the `main` branch.
+
+5. Navigate to the **Actions** tab of **your fork**.
+
+6. Select the **PR Validation** workflow.
+
+7. Click **Run workflow**.
+
+8. In the branch dropdown, select the same branch used to create the PR (e.g. `feature/my-feature`).
+
+9. Click **Run workflow**.
+
+Once the workflow completes successfully, the PR is ready for review and merge (subject to the repository's branch protection rules).
 
 ## Feature Documentation Format
 
