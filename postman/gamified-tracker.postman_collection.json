@@ -37,6 +37,9 @@
     { "key": "userAToken", "value": "", "type": "string" },
     { "key": "userBToken", "value": "", "type": "string" },
     { "key": "adminToken", "value": "", "type": "string" },
+    { "key": "adminRefreshToken", "value": "", "type": "string" },
+    { "key": "userARefreshToken", "value": "", "type": "string" },
+    { "key": "userBRefreshToken", "value": "", "type": "string" },
     { "key": "userAId", "value": "", "type": "string" },
     { "key": "userBId", "value": "", "type": "string" },
     { "key": "activityName", "value": "", "type": "string" },
@@ -76,8 +79,9 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
-                  "pm.collectionVariables.set('adminToken', token);",
+                  "var token = pm.response.json();",
+                  "pm.collectionVariables.set('adminToken', token.accessToken);",
+                  "pm.collectionVariables.set('adminRefreshToken', token.refreshToken);",
                   "pm.test('Response body is a JWT (3 dot-separated parts)', function () {",
                   "    pm.expect(token.split('.').length).to.eql(3);",
                   "});"
@@ -97,7 +101,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/auth/register", "host": ["{{gatewayUrl}}"], "path": ["auth", "register"] },
-            "description": "Registers a plain USER (role omitted, defaults to USER). Decodes the returned JWT to capture the numeric userId claim used throughout the rest of the collection."
+            "description": "Registers a plain USER (role omitted, defaults to USER). Returns an Access Token (JWT) and a Refresh Token. Decodes the returned JWT to capture the numeric userId claim used throughout the rest of the collection."
           },
           "event": [
             {
@@ -108,8 +112,9 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
-                  "pm.collectionVariables.set('userAToken', token);",
+                  "var token = pm.response.json();",
+                  "pm.collectionVariables.set('userAToken', token.accessToken);",
+                  "pm.collectionVariables.set('userARefreshToken', token.refreshToken);",
                   "function decodeJwt(t) {",
                   "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
                   "    while (payload.length % 4) payload += '=';",
@@ -150,8 +155,9 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
-                  "pm.collectionVariables.set('userBToken', token);",
+                  "var token = pm.response.json();",
+                  "pm.collectionVariables.set('userBToken', token.accessToken);",
+                  "pm.collectionVariables.set('userBRefreshToken', token.refreshToken);",
                   "function decodeJwt(t) {",
                   "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
                   "    while (payload.length % 4) payload += '=';",
@@ -178,7 +184,7 @@
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{gatewayUrl}}/auth/login", "host": ["{{gatewayUrl}}"], "path": ["auth", "login"] },
-            "description": "Confirms login works independently of register and returns a token for the same identity."
+            "description": "Confirms login works independently of register and returns an access token and refresh token. for the same identity."
           },
           "event": [
             {
@@ -189,7 +195,7 @@
                   "pm.test('Status is 200', function () {",
                   "    pm.response.to.have.status(200);",
                   "});",
-                  "var token = pm.response.text();",
+                  "var token = pm.response.json();",
                   "function decodeJwt(t) {",
                   "    var payload = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');",
                   "    while (payload.length % 4) payload += '=';",
@@ -233,6 +239,59 @@
                   "    var json = pm.response.json();",
                   "    pm.expect(json.detail).to.eql('Invalid email or password');",
                   "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"refreshToken\":\"{{userARefreshToken}}\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{gatewayUrl}}/auth/refresh",
+              "host": [
+                "{{gatewayUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Consumes the current refresh token and returns a new access token and refresh token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "var json = pm.response.json();",
+                  "",
+                  "pm.expect(json.accessToken).to.not.be.empty;",
+                  "pm.expect(json.refreshToken).to.not.be.empty;",
+                  "",
+                  "pm.collectionVariables.set('userAToken', json.accessToken);",
+                  "pm.collectionVariables.set('userARefreshToken', json.refreshToken);"
                 ]
               }
             }
